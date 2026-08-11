@@ -18,6 +18,7 @@ import os
 import discord
 import asyncio
 import aiosqlite
+import aiohttp
 import random
 import string
 from discord.ext import commands
@@ -192,20 +193,18 @@ def format_time_ago(ts_string):
         return "Unknown"
     
 def get_separator(color_hex: str) -> str:
-        """Returns the custom blue line for #0f13ff, otherwise defaults to the text separator."""
-            # Clean the hex string
-        if isinstance(color_hex, discord.Color):
-            clean_hex = str(color_hex).replace('#', '').lower()
-        else:
-            clean_hex = str(color_hex).replace('#', '').lower()
-    
-        # If the embed is your specific blue, use your new emoji line
-        if clean_hex == "0f13ff":
-            return "<:blue_line:1515792202377203753>" * 12 # Replace with your actual emoji ID
-        
-         # Otherwise, fall back to your original text line string
-        return "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    """Returns the custom blue line for #0f13ff, otherwise defaults to the text separator."""
+    if isinstance(color_hex, discord.Color):
+        clean_hex = str(color_hex).replace('#', '').lower()
+    else:
+        clean_hex = str(color_hex).replace('#', '').lower()
 
+    # If the embed is your specific blue, use your new emoji line
+    if clean_hex == "0f13ff":
+        return "<:blue_line:1515792202377203753>" * 12  # Replace with your actual emoji ID
+
+    # Otherwise, fall back to your original text line string
+    return "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 async def init_db():
     db_dir = os.path.dirname(DATABASE)
     if db_dir and not os.path.exists(db_dir):
@@ -1160,12 +1159,13 @@ async def on_ready():
     # 2. Wait 30 seconds
     await asyncio.sleep(30)
 
-    # 3. Send the "Systems Online" message to your channel
-    channel = bot.get_channel('cmd_channel')
+    # 3. Send the "Systems Online" message to your primary configured command channel
+    cmd_channel_id = GUILD_SETTINGS.get(1471660122035195916, {}).get('cmd_channel') or ALLOWED_CMD_CHANNELS[0]
+    channel = bot.get_channel(cmd_channel_id)
     if channel:
         await channel.send("Systems Online")
         print("Successfully sent 'Systems Online' to Discord!")
     else:
-        print("Channel not found. Check your TARGET_CHANNEL_ID.")
+        print("Channel not found. Check your configured command channel IDs.")
 
 bot.run(os.getenv("DISCORD_TOKEN"))

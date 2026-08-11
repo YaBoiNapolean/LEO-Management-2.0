@@ -1146,11 +1146,26 @@ async def roblox_user(itx: discord.Interaction, username: str):
 
 @bot.event
 async def on_ready():
+    # 1. Run your original startup tasks
     await init_db()
+
     try:
         synced = await bot.tree.sync()
-        print(f"Systems Online. Synced {len(synced)} commands across registered guilds.")
+        print(f"Synced {len(synced)} commands across registered guilds.")
     except Exception as e:
         print(f"Sync failed: {e}")
+
+    print("Startup complete. Waiting 30 seconds to announce status...")
+
+    # 2. Wait 30 seconds
+    await asyncio.sleep(30)
+
+    # 3. Send the "Systems Online" message to your channel
+    channel = bot.get_channel('cmd_channel')
+    if channel:
+        await channel.send("Systems Online")
+        print("Successfully sent 'Systems Online' to Discord!")
+    else:
+        print("Channel not found. Check your TARGET_CHANNEL_ID.")
 
 bot.run(os.getenv("DISCORD_TOKEN"))

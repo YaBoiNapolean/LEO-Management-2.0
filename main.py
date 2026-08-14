@@ -28,7 +28,7 @@ from datetime import datetime, timedelta, timezone
 # --- CONFIGURATION ---
 DATABASE = '/data/gsp_bot.db' 
 
-intents = discord.Intents.all()
+intents = discord.Intents.default()
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Visual Identity (embed colors)
@@ -1148,13 +1148,19 @@ async def on_ready():
     # 1. Run your original startup tasks
     await init_db()
 
-    try:
-        synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} commands across registered guilds.")
-    except Exception as e:
-        print(f"Sync failed: {e}")
+    # Sync commands to specific guilds (faster and more reliable than global sync)
+    total_synced = 0
+    for guild_id in GUILD_SETTINGS.keys():
+        try:
+            guild = discord.Object(id=guild_id)
+            bot.tree.copy_global_to(guild=guild)
+            synced = await bot.tree.sync(guild=guild)
+            print(f"Synced {len(synced)} commands to guild {GUILD_SETTINGS[guild_id]['name']} ({guild_id})")
+            total_synced += len(synced)
+        except Exception as e:
+            print(f"Failed to sync commands to guild {guild_id}: {e}")
 
-    print("Startup complete. Waiting 30 seconds to announce status...")
+    print(f"Startup complete. Total commands synced: {total_synced}. Waiting 30 seconds to announce status...")
 
     # 2. Wait 30 seconds
     await asyncio.sleep(30)

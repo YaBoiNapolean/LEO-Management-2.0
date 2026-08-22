@@ -21,6 +21,8 @@ import aiosqlite
 import aiohttp
 import random
 import string
+import resource
+import time
 from discord.ext import commands
 from discord import app_commands, ui
 from datetime import datetime, timedelta, timezone
@@ -30,6 +32,7 @@ DATABASE = '/data/gsp_bot.db'
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix='!', intents=intents)
+bot_start_time = time.monotonic()
 
 # Visual Identity (embed colors)
 GSP_CUSTOM_ORANGE = discord.Color.from_str("#0f13ff")
@@ -193,7 +196,7 @@ def format_time_ago(ts_string):
         return "Unknown"
     
 def get_separator(color_hex: str) -> str:
-    """Returns the custom blue line for #0f13ff, otherwise defaults to the text separator."""
+    """Return the registered blue-line emoji or the standard text separator."""
     if isinstance(color_hex, discord.Color):
         clean_hex = str(color_hex).replace('#', '').lower()
     else:
@@ -201,10 +204,25 @@ def get_separator(color_hex: str) -> str:
 
     # If the embed is your specific blue, use your new emoji line
     if clean_hex == "0f13ff":
-        return "<:blue_line:1515792202377203753>" * 12  # Replace with your actual emoji ID
+        return "<:blue_line:1515792202377203753>" * 12
 
     # Otherwise, fall back to your original text line string
     return "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+def format_uptime(seconds: float) -> str:
+    total_seconds = int(seconds)
+    days, remainder = divmod(total_seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    parts = []
+    if days:
+        parts.append(f"{days}d")
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes:
+        parts.append(f"{minutes}m")
+    parts.append(f"{seconds}s")
+    return " ".join(parts)
 async def init_db():
     db_dir = os.path.dirname(DATABASE)
     if db_dir and not os.path.exists(db_dir):
@@ -348,17 +366,24 @@ class RobloxMoreInfoView(ui.View):
     async def show_more_info(self, itx: discord.Interaction, button: discord.ui.Button):
         await itx.response.defer(ephemeral=True)
 
-        async with aiohttp.ClientSession() as session:
-            # 1. Fetch User Presence / Online Status
-            async with session.post(
-                "https://presence.roblox.com/v1/presence/users",
-                json={"userIds": [self.user_id]}
-            ) as resp:
-                presence_data = await resp.json()
+        try:
+            timeout = aiohttp.ClientTimeout(total=10)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(
+                    "https://presence.roblox.com/v1/presence/users",
+                    json={"userIds": [self.user_id]}
+                ) as resp:
+                    resp.raise_for_status()
+                    presence_data = await resp.json()
 
-            # 2. Fetch User Badges
-            async with session.get(f"https://badges.roblox.com/v1/users/{self.user_id}/badges") as resp:
-                badges_data = await resp.json()
+                async with session.get(f"https://badges.roblox.com/v1/users/{self.user_id}/badges") as resp:
+                    resp.raise_for_status()
+                    badges_data = await resp.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            return await itx.followup.send(
+                "❌ Roblox advanced information is unavailable right now.",
+                ephemeral=True,
+            )
 
         presence_map = {0: "Offline 🔴", 1: "Online 🟢", 2: "In Game 🎮", 3: "In Studio 🛠️"}
         p_type = 0
@@ -369,7 +394,7 @@ class RobloxMoreInfoView(ui.View):
         badge_count = len(badges_data.get("data", [])) if "data" in badges_data else 0
 
         adv_embed = discord.Embed(
-            title=f"🔍 ADVANCED DATA: {self.username}",
+            title=f"Roblox Advanced Info | {self.username}",
             color=GSP_CUSTOM_ORANGE
         )
 
@@ -384,21 +409,6 @@ class RobloxMoreInfoView(ui.View):
         adv_embed.set_footer(text=f"Requested by {itx.user.display_name}")
 
         await itx.followup.send(embed=adv_embed, ephemeral=True)
-
-    @ui.button(label='Decline Strike', style=discord.ButtonStyle.danger)
-    async def decline_strike(self, itx: discord.Interaction, button: ui.Button):
-        roles_config = GUILD_SETTINGS.get(self.guild_id, {}).get('roles', {})
-        strike_confirmer_id = roles_config.get('strike_confirmer')
-        
-        if itx.guild.get_role(strike_confirmer_id) not in itx.user.roles:
-            return await itx.response.send_message("❌ Unauthorized.", ephemeral=True)
-            
-        async with aiosqlite.connect(DATABASE) as db:
-            for inf_id in self.infraction_ids:
-                await db.execute("UPDATE infractions SET is_processed = 1 WHERE id = ?", (inf_id,))
-            await db.commit()
-        await itx.message.delete()
-        await itx.response.send_message(f"✅ Strike for {self.trooper.mention} was declined.", ephemeral=True)
 
 class ClearRecordConfirm(ui.View):
     def __init__(self, original_user, owner_id, record_id, table):
@@ -1011,6 +1021,59 @@ async def commands_directory(itx: discord.Interaction):
     
     await itx.response.send_message(embed=e)
 
+@bot.tree.command(name="status", description="Check the bot's live status")
+async def status(itx: discord.Interaction):
+    if not await is_cmd_channel(itx):
+        return
+    if itx.user.id != 1062166609931804702:
+        return await itx.response.send_message("❌ Unauthorized.", ephemeral=True)
+
+    started_at = time.monotonic()
+    await itx.response.defer()
+    response_time = round((time.monotonic() - started_at) * 1000)
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+
+    embed = discord.Embed(title="Bot Status", color=discord.Color.green())
+    embed.description = (
+        f"{SEPARATOR}\n"
+        f"**Uptime:** `{format_uptime(time.monotonic() - bot_start_time)}`\n"
+        f"**Response Time:** `{response_time}ms`\n"
+        f"**Memory Usage:** `{round(usage.ru_maxrss / 1024)} MB`\n"
+        f"**CPU Time:** `{usage.ru_utime:.2f}s`\n"
+        f"{SEPARATOR}"
+    )
+    embed.set_timestamp()
+    embed.set_footer(text=f"Response time: {response_time}ms")
+    await itx.followup.send(embed=embed)
+
+@bot.tree.command(name="logs", description="Show recent PM2 error logs")
+async def logs(itx: discord.Interaction, lines: app_commands.Range[int, 1, 100] = 20):
+    if not await is_cmd_channel(itx):
+        return
+    if not itx.user.guild_permissions.administrator:
+        return await itx.response.send_message(
+            "You do not have permission to use this command.", ephemeral=True
+        )
+
+    await itx.response.defer(ephemeral=True)
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "pm2", "logs", "Northside", "--err", "--lines", str(lines), "--nostream",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        output_bytes, _ = await asyncio.wait_for(process.communicate(), timeout=15)
+    except (FileNotFoundError, asyncio.TimeoutError):
+        return await itx.followup.send("❌ Failed to retrieve PM2 logs.", ephemeral=True)
+
+    output = output_bytes.decode("utf-8", errors="replace").strip()
+    if not output:
+        return await itx.followup.send("No recent error logs found.", ephemeral=True)
+
+    embed = discord.Embed(title="Recent PM2 Errors", color=discord.Color.red())
+    embed.description = f"```\n{output[:3900]}\n```"
+    await itx.followup.send(embed=embed, ephemeral=True)
+
 @bot.tree.command(name='dept_performance', description='View activity and log metrics for a specific department')
 @app_commands.choices(department=[
     app_commands.Choice(name="Georgia State Patrol (GSP)", value="1471660122035195916"),
@@ -1110,7 +1173,7 @@ async def roblox_user(itx: discord.Interaction, username: str):
     created_str = datetime.strptime(created_raw[:10], "%Y-%m-%d").strftime("%B %d, %Y") if created_raw else "Unknown"
 
     embed = discord.Embed(
-        title=f"🎮 ROBLOX PROFILE: {profile.get('displayName')} (@{profile.get('name')})",
+        title=f"Roblox Profile | {profile.get('displayName')} (@{profile.get('name')})",
         url=f"https://www.roblox.com/users/{user_id}/profile",
         color=GSP_CUSTOM_ORANGE
     )

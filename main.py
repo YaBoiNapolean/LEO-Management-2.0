@@ -33,6 +33,7 @@ DATABASE = '/data/gsp_bot.db'
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix='!', intents=intents)
 bot_start_time = time.monotonic()
+presence_task = None
 
 # Visual Identity (embed colors)
 GSP_CUSTOM_ORANGE = discord.Color.from_str("#0f13ff")
@@ -204,7 +205,7 @@ def get_separator(color_hex: str) -> str:
 
     # If the embed is your specific blue, use your new emoji line
     if clean_hex == "0f13ff":
-        return "<:blue_line:1515792202377203753>" * 12
+        return "<:blue_line:1540755725385728062>" * 12
 
     # Otherwise, fall back to your original text line string
     return "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -241,6 +242,34 @@ async def init_db():
             except aiosqlite.OperationalError:
                 pass 
         await db.commit()
+
+async def get_record_count():
+    tables = ("arrests", "citations", "bolos", "warrants", "infractions")
+    async with aiosqlite.connect(DATABASE) as db:
+        total = 0
+        for table in tables:
+            async with db.execute(f"SELECT COUNT(*) FROM {table}") as cursor:
+                total += (await cursor.fetchone())[0]
+    return total
+
+async def rotate_presence():
+    presence_index = 0
+    while True:
+        try:
+            record_count = await get_record_count()
+            presence_options = [
+                (discord.ActivityType.watching, f"{record_count:,} law enforcement records"),
+                (discord.ActivityType.watching, f"{len(bot.guilds)} departments"),
+                (discord.ActivityType.listening, "/commands for the command directory"),
+                (discord.ActivityType.playing, "LEO Management 2.0"),
+                (discord.ActivityType.watching, f"uptime: {format_uptime(time.monotonic() - bot_start_time)}"),
+            ]
+            activity_type, activity_name = presence_options[presence_index % len(presence_options)]
+            await bot.change_presence(activity=discord.Activity(type=activity_type, name=activity_name))
+            presence_index += 1
+        except (aiosqlite.Error, discord.HTTPException) as error:
+            print(f"Presence update failed: {error}")
+        await asyncio.sleep(3)
 
 async def generate_unique_id():
     async with aiosqlite.connect(DATABASE) as db:
@@ -1208,6 +1237,8 @@ async def roblox_user(itx: discord.Interaction, username: str):
 
 @bot.event
 async def on_ready():
+    global presence_task
+
     # 1. Run your original startup tasks
     await init_db()
 
@@ -1222,6 +1253,9 @@ async def on_ready():
             total_synced += len(synced)
         except Exception as e:
             print(f"Failed to sync commands to guild {guild_id}: {e}")
+
+    if presence_task is None or presence_task.done():
+        presence_task = asyncio.create_task(rotate_presence())
 
     print(f"Startup complete. Total commands synced: {total_synced}. Waiting 30 seconds to announce status...")
 
